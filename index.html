@@ -29,8 +29,8 @@
   #phase.free { background:var(--pink); }
   #score { margin-left:auto; display:flex; gap:14px; font-weight:700; }
   #meterWrap { display:inline-block; vertical-align:middle; width:140px; height:12px; background:#fff3; border-radius:6px; overflow:hidden; position:relative; }
-  #meter { height:100%; width:0; background:linear-gradient(90deg,#7fffb0,#ffd24a,#ff3b3b); }
-  #limitMark { position:absolute; top:-2px; bottom:-2px; width:2px; background:#fff; }
+  #meter { height:100%; width:100%; transform:scaleX(0); transform-origin:left; background:linear-gradient(90deg,#7fffb0,#ffd24a,#ff3b3b); }
+  #limitMark { position:absolute; left:50%; top:-2px; bottom:-2px; width:2px; background:#fff; }
 
   #chant { position:absolute; left:0; right:0; bottom:9%; text-align:center; font-size:clamp(28px,6vw,72px);
     font-weight:900; letter-spacing:.06em; text-shadow:0 0 18px #ff5fa2, 0 4px 10px #000; }
@@ -45,7 +45,7 @@
   #banner.pass { color:var(--green); }
   #banner.freeze { color:#fff; }
 
-  #timebar { position:absolute; left:0; bottom:0; height:8px; background:#fff; width:0; }
+  #timebar { position:absolute; left:0; bottom:0; height:8px; background:#fff; width:100%; transform:scaleX(0); transform-origin:left; }
 
   #start { position:absolute; inset:0; display:flex; flex-direction:column; gap:18px; align-items:center;
     justify-content:center; background:radial-gradient(#3a0c26,#0b0008); text-align:center; padding:16px; }
@@ -121,7 +121,7 @@
   const chantSpans = [...chantEl.querySelectorAll('span')];
 
   function resize() {
-    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    DPR = 1;   // 파티클은 흐릿한 빛이라 고해상도 불필요 — 폰 부담 크게 줄임
     W = innerWidth; H = innerHeight;
     fx.width = W * DPR; fx.height = H * DPR;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -164,8 +164,19 @@
   }
 
   // ---------- 움직임 감지 ----------
-  function analyze() {
-    if (video.readyState < 2) return;
+  // 카메라에 새 프레임이 들어왔을 때만 분석 (같은 화면을 두 번 읽지 않음)
+  let newFrame = false, lastAnalyze = 0, lastVfc = -1e9;
+  function watchFrames() {
+    if (video.requestVideoFrameCallback) {
+      const cb = () => { newFrame = true; lastVfc = performance.now(); video.requestVideoFrameCallback(cb); };
+      video.requestVideoFrameCallback(cb);
+    }
+  }
+  function analyze(now) {
+    if (video.readyState < 2) return false;
+    if (now - lastVfc < 300) { if (!newFrame) return false; newFrame = false; }   // 새 프레임 신호가 살아 있으면 그걸 따름
+    else if (now - lastAnalyze < 33) return false;                               // 아니면 30회/초로 제한
+    lastAnalyze = now;
     sctx.drawImage(video, 0, 0, SW, SH);
     const d = sctx.getImageData(0, 0, SW, SH).data;
     const cur = new Uint8ClampedArray(SW * SH);
@@ -177,6 +188,7 @@
     prev = cur;
     const raw = motionCells.length / cur.length;
     motion = motion * 0.6 + raw * 0.4;
+    return true;
   }
   // 저해상도 좌표 → 화면 좌표 (object-fit:cover + 좌우반전 반영)
   function toScreen(sx, sy) {
@@ -188,42 +200,61 @@
   }
 
   // ---------- 파티클 ----------
+  // 빛 번짐(glow)은 색깔별로 한 번만 그려 두고(스프라이트) 매 프레임엔 복사만 한다 — 폰에서 shadowBlur가 가장 무거움
+  const MAX_PARTS = 700;
+  const sprites = {};
+  function sprite(hue, star) {
+    const key = hue + (star ? 's' : 'c');
+    if (sprites[key]) return sprites[key];
+    const S = 64, c = document.createElement('canvas'); c.width = c.height = S;
+    const g = c.getContext('2d'), m = S / 2;
+    const grad = g.createRadialGradient(m, m, 0, m, m, m);
+    grad.addColorStop(0, `hsla(${hue},100%,92%,1)`);
+    grad.addColorStop(0.18, `hsla(${hue},100%,70%,0.9)`);
+    grad.addColorStop(0.45, `hsla(${hue},100%,60%,0.25)`);
+    grad.addColorStop(1, `hsla(${hue},100%,50%,0)`);
+    g.fillStyle = grad; g.fillRect(0, 0, S, S);
+    if (star) {                                   // 십자 반짝임
+      g.fillStyle = `hsla(${hue},100%,90%,0.95)`;
+      g.beginPath();
+      for (let j = 0; j < 8; j++) { const r = j % 2 ? 3 : m, a = j * Math.PI / 4; g.lineTo(m + Math.cos(a) * r, m + Math.sin(a) * r); }
+      g.fill();
+    }
+    return (sprites[key] = c);
+  }
   const parts = [];
+  function addPart(p) {
+    p.img = sprite(p.hue, p.star);
+    if (parts.length < MAX_PARTS) parts.push(p);
+    else parts[(Math.random() * MAX_PARTS) | 0] = p;   // 꽉 차면 아무거나 교체
+  }
   function spawn(danger) {
-    const n = Math.min(motionCells.length, danger ? 60 : 35);
+    const n = Math.min(motionCells.length, danger ? 24 : 14);
+    const pal = danger ? [0, 10, 20] : [325, 335, 345, 48, 290];
     for (let k = 0; k < n; k++) {
       const idx = motionCells[(Math.random() * motionCells.length) | 0];
       const [x, y] = toScreen(idx % SW, (idx / SW) | 0);
       const a = Math.random() * Math.PI * 2, sp = 0.5 + Math.random() * (danger ? 5 : 3);
-      const pal = danger ? [0, 8, 20] : [325, 335, 345, 48, 290];
-      parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1, life: 0,
+      addPart({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1, life: 0,
         max: 30 + Math.random() * 40, size: (danger ? 3 : 2) + Math.random() * 4,
         hue: pal[(Math.random() * pal.length) | 0], star: Math.random() < 0.35, rot: Math.random() * 6 });
     }
-    if (parts.length > 2000) parts.splice(0, parts.length - 2000);
   }
-  function drawParts() {
+  function drawParts(dt) {
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter';
-    for (let i = parts.length - 1; i >= 0; i--) {
+    let w = 0;
+    for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
-      p.life++; p.x += p.vx; p.y += p.vy; p.vy += 0.06; p.vx *= 0.98; p.rot += 0.1;
-      if (p.life > p.max) { parts.splice(i, 1); continue; }
-      const t = 1 - p.life / p.max, s = p.size * (0.4 + t);
-      const tw = 0.6 + 0.4 * Math.sin(p.life * 0.7 + p.rot);   // 반짝임
-      ctx.globalAlpha = t * tw;
-      ctx.fillStyle = `hsl(${p.hue},100%,70%)`;
-      ctx.shadowColor = `hsl(${p.hue},100%,60%)`; ctx.shadowBlur = 12;
-      if (p.star) {
-        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-        ctx.beginPath();
-        for (let j = 0; j < 8; j++) { const r = j % 2 ? s * 0.35 : s * 2.2, a = j * Math.PI / 4; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
-        ctx.fill(); ctx.restore();
-      } else {
-        ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, Math.PI * 2); ctx.fill();
-      }
+      p.life += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.06 * dt; p.vx *= 1 - 0.02 * dt;
+      if (p.life > p.max) continue;
+      parts[w++] = p;
+      const t = 1 - p.life / p.max, s = p.size * (0.4 + t) * (p.star ? 5 : 3.2);
+      ctx.globalAlpha = t * (0.6 + 0.4 * Math.sin(p.life * 0.7 + p.rot));   // 반짝임
+      ctx.drawImage(p.img, p.x - s, p.y - s, s * 2, s * 2);
     }
-    ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'source-over';
+    parts.length = w;
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
 
   // ---------- 게임 루프 ----------
@@ -232,7 +263,7 @@
   let syllableTimes = [], sylIdx = 0, overCount = 0, lastTick = 0, judgeStart = 0;
   let passN = 0, caughtN = 0;
   const GRACE = 700;   // 얼음 직후 멈출 시간 (ms)
-  const limit = () => 0.042 - (+$('sens').value) * 0.0036;   // 민감도 1→3.8%, 10→0.6%
+  const limit = () => (0.042 - (+$('sens').value) * 0.0036) * 1.6;   // 민감도 1→6.1%, 10→1.0%
 
   function setPhaseLabel(text, cls) { const el = $('phase'); el.textContent = text; el.className = cls || ''; }
   function banner(text, cls, ms) {
@@ -274,53 +305,56 @@
       sndCaught(); speak('잡았다!');
       // 폭발 파티클
       for (let k = 0; k < 160; k++) { const a = Math.random() * 6.28, sp = 2 + Math.random() * 9;
-        parts.push({ x: W / 2, y: H / 2, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0, max: 50 + Math.random() * 30,
+        addPart({ x: W / 2, y: H / 2, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0, max: 50 + Math.random() * 30,
           size: 3 + Math.random() * 5, hue: Math.random() * 25, star: Math.random() < .5, rot: Math.random() * 6 }); }
     } else {
       passN++; $('sPass').textContent = passN;
       $('frame').className = 'pass'; banner('통과!', 'pass', 2000); setPhaseLabel('통과', 'free');
       sndPass(); speak('통과!');
-      for (let k = 0; k < 120; k++) parts.push({ x: Math.random() * W, y: H + 10, vx: (Math.random() - .5) * 2,
+      for (let k = 0; k < 120; k++) addPart({ x: Math.random() * W, y: H + 10, vx: (Math.random() - .5) * 2,
         vy: -6 - Math.random() * 8, life: 0, max: 70 + Math.random() * 40, size: 3 + Math.random() * 4,
         hue: [130, 50, 330][k % 3], star: Math.random() < .5, rot: Math.random() * 6 });
     }
   }
 
+  let lastNow = 0;
   function loop(now) {
     requestAnimationFrame(loop);
-    analyze();
+    const dt = lastNow ? Math.min(3, (now - lastNow) / 16.67) : 1;   // 60Hz 기준 배수 (120Hz 태블릿도 같은 속도)
+    lastNow = now;
+    const fresh = analyze(now);
     const el = now - phaseStart;
     const lim = limit();
-    $('meter').style.width = Math.min(100, motion / (lim * 2) * 100) + '%';
-    $('limitMark').style.left = '50%';
+    if (fresh) $('meter').style.transform = `scaleX(${Math.min(1, motion / (lim * 2))})`;
+    const moving = fresh && motionCells.length > 3;
 
     if (!paused && phase === 'free') {
       while (sylIdx < syllableTimes.length && el >= syllableTimes[sylIdx]) {
         chantSpans[sylIdx].classList.add('on'); sndSyllable(sylIdx); sylIdx++;
       }
-      $('timebar').style.width = (el / phaseDur * 100) + '%';
+      $('timebar').style.transform = `scaleX(${Math.min(1, el / phaseDur)})`;
       $('timebar').style.background = 'var(--pink)';
-      if (motionCells.length > 3) spawn(false);
+      if (moving) spawn(false);
       if (el >= phaseDur) startFreeze(now);
     } else if (!paused && phase === 'freeze') {
       const judging = now >= judgeStart;
-      $('timebar').style.width = (100 - el / phaseDur * 100) + '%';
+      $('timebar').style.transform = `scaleX(${Math.max(0, 1 - el / phaseDur)})`;
       $('timebar').style.background = judging ? 'var(--red)' : '#fff';
-      if (motionCells.length > 3) spawn(judging && motion > lim * 0.6);
+      if (moving) spawn(judging && motion > lim * 0.6);
       if (judging) {
         if (now - lastTick > 1000) { sndTick(); lastTick = now; }
-        overCount = motion > lim ? overCount + 1 : 0;
+        if (fresh) overCount = motion > lim ? overCount + 1 : 0;
         if (overCount >= 3) { startResult(now, true); }
         else if (el >= phaseDur) { startResult(now, false); }
       }
     } else if (!paused && phase === 'result') {
-      $('timebar').style.width = '0';
-      if (motionCells.length > 3) spawn(false);
+      $('timebar').style.transform = 'scaleX(0)';
+      if (moving) spawn(false);
       if (el >= phaseDur) startFree(now);
-    } else if (paused && motionCells.length > 3) {
+    } else if (paused && moving) {
       spawn(false);
     }
-    drawParts();
+    drawParts(dt);
   }
 
   $('pauseBtn').onclick = () => {
@@ -352,9 +386,10 @@
       ac = ac || new (window.AudioContext || window.webkitAudioContext)();
       await ac.resume();
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('이 브라우저는 카메라를 지원하지 않습니다. Chrome·Edge로 열어 주세요.');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false });
       video.srcObject = stream;
       await video.play();
+      watchFrames();
       if ('speechSynthesis' in window) speechSynthesis.getVoices();
       $('start').classList.add('hidden');
       $('controls').classList.remove('hidden');
