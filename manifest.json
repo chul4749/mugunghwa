@@ -1,0 +1,14 @@
+{
+  "name": "무궁화 꽃이 피었습니다",
+  "short_name": "무궁화",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0b0008",
+  "theme_color": "#3a0c26",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
