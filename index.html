@@ -58,6 +58,10 @@
 
   #mission { position:absolute; left:50%; bottom:12%; transform:translateX(-50%); background:#000a; border:3px solid #fff;
     border-radius:999px; padding:8px 22px; font-size:clamp(20px,4.5vw,40px); font-weight:900; white-space:nowrap; pointer-events:none; }
+  /* 노래 도중 미리 알려주는 미션 (노래 글자 위쪽) */
+  #mission.pre { bottom:calc(9% + clamp(28px,6vw,72px) * 1.5 + 16px); border-color:var(--gold); color:#fff4c2;
+    animation:popIn .45s cubic-bezier(.2,1.8,.4,1); }
+  @keyframes popIn { from { transform:translateX(-50%) scale(.3); opacity:0; } to { transform:translateX(-50%) scale(1); opacity:1; } }
 
   .side { position:absolute; top:0; bottom:0; width:50%; display:flex; flex-direction:column; align-items:center; justify-content:center;
     font-size:clamp(30px,8vw,100px); font-weight:900; text-shadow:0 6px 24px #000; pointer-events:none; opacity:0;
@@ -125,6 +129,7 @@
     #score { gap:6px; }
     #chant { bottom:130px; }
     #mission { bottom:140px; }
+    #mission.pre { bottom:200px; }
     #controls { left:12px; right:12px; justify-content:space-between; }
     button { font-size:19px; padding:12px 22px; }
   }
@@ -236,7 +241,7 @@
   ];
   const TEAMS = { solo: [{ name: '나', emoji: '🙋' }], vs: [{ name: '호랑이', emoji: '🐯' }, { name: '판다', emoji: '🐼' }] };
   const STEPS = 2;          // 몇 번 통과하면 술래를 터치할 수 있는지
-  const GRACE = 1300;       // 얼음 직후 포즈 잡을 시간 (ms)
+  const GRACE = 1000;       // 얼음 직후 판정 전 여유 (미션은 노래 도중에 미리 알려줌)
 
   let mode = 'solo', players = [];
   function makePlayers() {
@@ -541,7 +546,7 @@
   // ---------- 게임 진행 ----------
   // phase: free → freeze(포즈 시간 → 판정) → result → free ... (자유 시간에 술래 터치 → result(승리))
   let phase = 'idle', phaseStart = 0, phaseDur = 0, paused = false;
-  let syllableTimes = [], sylIdx = 0, lastTick = 0, judgeStart = 0, mission = MISSIONS[0];
+  let syllableTimes = [], sylIdx = 0, lastTick = 0, judgeStart = 0, mission = MISSIONS[0], missionAt = 0, missionShown = false;
   const limit = () => (0.042 - (+$('sens').value) * 0.0036) * 1.6;   // 민감도 1→6.1%, 10→1.0%
 
   function setPhaseLabel(text, cls) { const el = $('phase'); el.textContent = text; el.className = cls || ''; }
@@ -570,9 +575,12 @@
     const sum = w.reduce((a, b) => a + b, 0);
     let acc = 0; syllableTimes = w.map(x => (acc += x / sum * phaseDur));
     sylIdx = 0;
+    { let m; do { m = MISSIONS[(Math.random() * MISSIONS.length) | 0]; } while (m === mission); mission = m; }   // 직전과 다른 미션
+    missionAt = Math.max(0, Math.min(syllableTimes[2], phaseDur - 1800));   // '무궁화' 다음, 노래 끝나기 최소 1.8초 전
+    missionShown = false;
+    $('mission').className = 'hidden';
     chantSpans.forEach(s => s.classList.remove('on'));
     chantEl.classList.remove('hidden');
-    $('mission').classList.add('hidden');
     $('frame').className = '';
     $('banner').className = '';
     clearSides();
@@ -585,17 +593,16 @@
     phase = 'freeze'; phaseStart = now; lastTick = now;
     phaseDur = GRACE + 3000 + Math.random() * 2000;      // 얼음 3~5초 판정
     judgeStart = now + GRACE;
-    mission = MISSIONS[(Math.random() * MISSIONS.length) | 0];
     players.forEach(p => { p.over = 0; p.out = false; });
     pendingShot = null; shotAt = judgeStart + 800;
     $('frame').className = 'freeze';
     setPhaseLabel('얼음! 🧊', 'freeze');
     banner(`<div class="emo">${mission.e}</div><div>${mission.t}</div>`, 'freeze', GRACE);
     $('mission').textContent = mission.e + ' ' + mission.t;
-    $('mission').classList.remove('hidden');
+    $('mission').className = '';
     chantEl.classList.add('hidden');
     bearState('front turn', '');
-    sndFreeze(); speak(mission.t);
+    sndFreeze(); speak('얼음!');
   }
   function catchPlayer(p, now) {
     p.out = true; p.caught++; p.steps = Math.max(0, p.steps - 1);
@@ -672,6 +679,14 @@
     if (run && phase === 'free') {
       while (sylIdx < syllableTimes.length && el >= syllableTimes[sylIdx]) {
         chantSpans[sylIdx].classList.add('on'); sndSyllable(sylIdx); sylIdx++;
+      }
+      if (!missionShown && el >= missionAt) {
+        missionShown = true;
+        $('mission').textContent = mission.e + ' ' + mission.t;
+        $('mission').className = 'pre';
+        if (!canTouch()) { bubble.textContent = mission.e + ' 준비!'; bubble.style.display = ''; }
+        tone(1568, 0.12, 'sine', 0, 0.12); tone(2093, 0.18, 'sine', 0.1, 0.12);   // 띠링
+        speak(mission.t.replace(' 얼음!', '!'));
       }
       $('timebar').style.transform = `scaleX(${Math.min(1, el / phaseDur)})`;
       $('timebar').style.background = 'var(--pink)';

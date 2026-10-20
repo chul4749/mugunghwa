@@ -1,5 +1,5 @@
 // 오프라인 캐시: 한 번 접속하면 이후엔 인터넷 없이 실행
-const CACHE = 'mugunghwa-v5';
+const CACHE = 'mugunghwa-v6';
 const FILES = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', e => {
