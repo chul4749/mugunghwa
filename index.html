@@ -71,7 +71,7 @@
   #sideL { left:0; } #sideR { right:0; }
 
   /* 술래 곰 */
-  #bear { position:absolute; transform:translate(-50%,-50%); pointer-events:none; transition:width .6s, left .6s, top .6s; }
+  #bear { position:absolute; transform:translate(-50%,-50%); pointer-events:auto; cursor:pointer; touch-action:none; transition:width .6s, left .6s, top .6s; }
   #bear svg { display:block; width:100%; height:auto; filter:drop-shadow(0 6px 12px #0009); overflow:visible; }
   #bear .face, #bear .xeyes, #bear .mouthOpen { display:none; }
   #bear.front .face { display:inline; } #bear.front .tail { display:none; }
@@ -193,7 +193,7 @@
     <p>노래가 나오는 동안은 마음껏 움직이고 🎈풍선을 터뜨려요.<br>
        노래가 끝나면 🐻술래가 돌아봐요. 미션대로 <b>얼음!</b><br>
        움직이면 <b style="color:#ff6b6b">잡았다</b>, 가만히 있으면 <b style="color:#5dff98">통과</b>!<br>
-       두 번 통과하면 술래가 가까이 와요. 그때 손을 흔들어 <b style="color:#ffd84a">술래를 터치</b>하면 이겨요!</p>
+       두 번 통과하면 술래가 가까이 와요. 그때 달려가서 <b style="color:#ffd84a">화면 속 술래를 손가락으로 콕!</b> 누르면 이겨요!</p>
     <div class="row">
       <button id="soloBtn">🙋 혼자 하기</button>
       <button id="vsBtn" class="alt">👫 둘이 겨루기</button>
@@ -240,12 +240,12 @@
     { e: '⭐', t: '별처럼 쫙 펴고 얼음!' }, { e: '🐧', t: '펭귄처럼 얼음!' }, { e: '🧊', t: '그대로 얼음!' },
   ];
   const TEAMS = { solo: [{ name: '나', emoji: '🙋' }], vs: [{ name: '호랑이', emoji: '🐯' }, { name: '판다', emoji: '🐼' }] };
-  const STEPS = 2;          // 몇 번 통과하면 술래를 터치할 수 있는지
+  const STEPS = 2;          // 몇 번 통과하면 술래를 눌러 잡을 수 있는지
   const GRACE = 1000;       // 얼음 직후 판정 전 여유 (미션은 노래 도중에 미리 알려줌)
 
   let mode = 'solo', players = [];
   function makePlayers() {
-    players = TEAMS[mode].map((t, i) => ({ ...t, i, motion: 0, over: 0, out: false, pass: 0, caught: 0, pops: 0, wins: 0, steps: 0, touch: 0 }));
+    players = TEAMS[mode].map((t, i) => ({ ...t, i, motion: 0, over: 0, out: false, pass: 0, caught: 0, pops: 0, wins: 0, steps: 0 }));
   }
 
   // ---------- 소리 (WebAudio 합성, 오프라인) ----------
@@ -490,9 +490,24 @@
     bear.style.width = size + 'px'; bear.style.left = x + 'px'; bear.style.top = y + 'px';
     bearGeom = { x, y, r: size * 0.55 };
     stepsEl.textContent = players.map(p => (mode === 'vs' ? p.emoji : '') +
-      (p.steps >= STEPS ? '👋터치!' : '🐾'.repeat(p.steps) + '⚪'.repeat(STEPS - p.steps))).join('  ');
+      (p.steps >= STEPS ? '👆콕!' : '🐾'.repeat(p.steps) + '⚪'.repeat(STEPS - p.steps))).join('  ');
   }
   const canTouch = () => players.some(p => p.steps >= STEPS);
+  // 화면 속 술래를 손가락으로 누르면 잡기 (자유 시간에만 — 얼음 중에 달려오면 이미 움직여서 잡힘)
+  bear.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (paused || phase === 'idle') return;
+    if (phase !== 'free') return;
+    // 둘이 모드: 곰의 왼쪽 절반을 누르면 🐯, 오른쪽 절반이면 🐼 (가까이 온 쪽이 하나뿐이면 그 사람)
+    const ready = players.filter(p => p.steps >= STEPS);
+    if (!ready.length) {
+      bubble.textContent = '아직 멀어! 🐾 더 통과해 봐'; bubble.style.display = '';
+      tone(300, 0.15, 'triangle', 0, 0.15, 200);
+      return;
+    }
+    const who = ready.length === 1 ? ready[0] : players[e.clientX < bearGeom.x ? 0 : 1];
+    winTouch(who, performance.now());
+  });
 
   // ---------- 얼음 사진 (기기 안 IndexedDB에만 저장) ----------
   let photos = [];   // 최신순 {id, blob, label, url}
@@ -544,7 +559,7 @@
   }
 
   // ---------- 게임 진행 ----------
-  // phase: free → freeze(포즈 시간 → 판정) → result → free ... (자유 시간에 술래 터치 → result(승리))
+  // phase: free → freeze(포즈 시간 → 판정) → result → free ... (자유 시간에 화면 속 술래를 누르면 → result(승리))
   let phase = 'idle', phaseStart = 0, phaseDur = 0, paused = false;
   let syllableTimes = [], sylIdx = 0, lastTick = 0, judgeStart = 0, mission = MISSIONS[0], missionAt = 0, missionShown = false;
   const limit = () => (0.042 - (+$('sens').value) * 0.0036) * 1.6;   // 민감도 1→6.1%, 10→1.0%
@@ -584,9 +599,8 @@
     $('frame').className = '';
     $('banner').className = '';
     clearSides();
-    players.forEach(p => { p.touch = 0; });
     placeBear();
-    bearState(canTouch() ? 'touchable' : '', canTouch() ? '👋 나를 터치해 봐!' : '');
+    bearState(canTouch() ? 'touchable' : '', canTouch() ? '👆 나를 콕 눌러 봐!' : '');
     setPhaseLabel('자유 시간 🏃', 'free');
   }
   function startFreeze(now) {
@@ -629,8 +643,8 @@
       else {
         $('frame').className = 'pass'; setPhaseLabel('통과', 'free');
         const near = players[0].steps >= STEPS;
-        banner(`통과!${near ? '<div class="sub">술래가 가까이 왔어! 👋 터치해 봐!</div>' : ''}`, 'pass', 2200);
-        speak(near ? '통과! 이제 술래를 터치해 봐!' : '통과!');
+        banner(`통과!${near ? '<div class="sub">술래가 가까이 왔어! 달려가서 👆 콕!</div>' : ''}`, 'pass', 2200);
+        speak(near ? '통과! 이제 달려가서 술래를 눌러 봐!' : '통과!');
       }
     } else {
       $('frame').className = passed.length ? 'pass' : 'caught';
@@ -693,12 +707,6 @@
       if (moving) spawn(false);
       if (fresh) {
         popBalloons();
-        // 술래 터치: 가까이 온 선수가 곰 위에서 손을 흔들면 (연속 2번 감지)
-        for (const p of players) {
-          if (p.steps < STEPS) continue;
-          p.touch = hitsIn(bearGeom.x, bearGeom.y, bearGeom.r, mode === 'solo' ? -1 : p.i) >= 5 ? p.touch + 1 : 0;
-          if (p.touch >= 2) { winTouch(p, now); break; }
-        }
       }
       if (phase === 'free' && el >= phaseDur) startFreeze(now);
     } else if (run && phase === 'freeze') {
